@@ -1,0 +1,13 @@
+node_modules/
+.dart_tool/
+build/
+.flutter-plugins
+venv/
+.env/
+*.pt
+*.h5
+*.gguf
+*.bin
+datasets/
+.DS_Store
+Thumbs.db
