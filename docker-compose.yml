@@ -1,0 +1,16 @@
+version: '3.8'
+
+services:
+  api_gateway:
+    build: 
+      context: ./backend/api_gateway
+      dockerfile: Dockerfile
+    container_name: kisansetu_backend
+    ports:
+      - "8000:8000"
+    volumes:
+      # This mounts your local code into the container.
+      # When you save a file in Neovim, the server auto-reloads!
+      - ./backend/api_gateway:/app:z
+    environment:
+      - ENVIRONMENT=development
