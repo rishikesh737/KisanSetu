@@ -1,0 +1,32 @@
+name: Backend CI
+
+# This tells GitHub to run this pipeline whenever a PR is opened against 'dev' or 'main', 
+# BUT only if files inside the backend/ folder were changed.
+on:
+  pull_request:
+    branches: [ dev, main ]
+    paths:
+      - 'backend/**'
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install Dependencies
+        run: |
+          cd backend/api_gateway
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Basic Syntax Check
+        run: |
+          cd backend/api_gateway
+          python -m py_compile main.py
