@@ -7,6 +7,9 @@ from sqlalchemy import pool
 
 from alembic import context
 
+from database.session import Base
+import database.models
+
 # 1. Add the current directory to Python's path so it can find your models
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 from database.models import Base

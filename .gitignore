@@ -18,3 +18,5 @@ Thumbs.db
 .venv/
 venv/
 mobilenet_v2_kisansetu.pt
+ai_services/disease_detection/research/
+*.h5

@@ -1,28 +1,16 @@
 from fastapi import FastAPI
-from services.weather_service import fetch_5_day_forecast
-from services.mandi_service import fetch_mandi_prices
+from routers import weather, market, disease, ivr
 
-app = FastAPI(title="KisanSetu API")
+app = FastAPI(title="KisanSetu API Gateway")
+
+# Register routers with clear versioned prefixes
+app.include_router(weather.router, prefix="/api/v1/weather", tags=["Weather"])
+app.include_router(market.router, prefix="/api/v1/mandi", tags=["Market"])
+# These will be populated soon
+app.include_router(disease.router, prefix="/api/v1/disease", tags=["AI Inference"])
+app.include_router(ivr.router, prefix="/api/v1/ivr", tags=["Voice Engine"])
 
 
 @app.get("/")
 async def root():
-    return {"status": "healthy", "service": "KisanSetu API"}
-
-
-@app.get("/api/v1/weather/{district}")
-async def get_weather(district: str):
-    """
-    Endpoint for the Flutter app and IVR to fetch weather by district.
-    """
-    weather_data = await fetch_5_day_forecast(district_name=district)
-    return weather_data
-
-
-@app.get("/api/v1/mandi/{crop}")
-async def get_mandi_prices(crop: str):
-    """
-    Endpoint to fetch daily Mandi prices for a specific crop.
-    """
-    mandi_data = await fetch_mandi_prices(crop_name=crop)
-    return mandi_data
+    return {"status": "healthy", "service": "KisanSetu API Gateway"}
