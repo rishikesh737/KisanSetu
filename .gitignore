@@ -11,3 +11,12 @@ venv/
 datasets/
 .DS_Store
 Thumbs.db
+**/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+mobilenet_v2_kisansetu.pt
+ai_services/disease_detection/research/
+*.h5

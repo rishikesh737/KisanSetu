@@ -1,6 +1,18 @@
 version: '3.8'
 
 services:
+  db:
+    image: postgres:15-alpine
+    container_name: kisansetu_db
+    environment:
+      POSTGRES_USER: kisan_admin
+      POSTGRES_PASSWORD: kisan_password
+      POSTGRES_DB: kisansetu
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data:z
+
   api_gateway:
     build: 
       context: ./backend/api_gateway
@@ -9,8 +21,12 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      # This mounts your local code into the container.
-      # When you save a file in Neovim, the server auto-reloads!
       - ./backend/api_gateway:/app:z
     environment:
       - ENVIRONMENT=development
+      - DATABASE_URL=postgresql://kisan_admin:kisan_password@db:5432/kisansetu
+    depends_on:
+      - db
+
+volumes:
+  pgdata:
