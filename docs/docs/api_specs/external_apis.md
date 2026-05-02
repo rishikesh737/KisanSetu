@@ -32,26 +32,28 @@ Fetches a 5-day / 3-hour interval weather forecast for a specified location.
         ]
       }
     ],
-     "city": {      i    sdw
+    "city": {
       "name": "Goa"
     }
   }
 }
+```
 
----
 
 ## 2. Mandi Market Prices
 Fetches the 10 most recent market prices for a specific commodity from the Indian Government's Agmarknet database.
 
-*   Endpoint: /api/v1/mandi/{crop}
-*   Method: GET
-*   Path Parameters:
-    *   crop (string): The name of the commodity (e.g., Tomato, Onion).
-
-* Query Parameters:
-    *   state_code (string, default: Goa): The state to filter by (e.g., Maharashtra).
-
+* Endpoint: /api/v1/mandi/{crop}
+* Method: GET
+* Path Parameters:
+* crop (string): The name of the commodity (e.g., Tomato, Onion).
+      * Query Parameters:
+* state_code (string, optional, default: Goa): The state to filter by (e.g., Maharashtra).
+      * Success Response (200 OK)
+  
 ### Success Response (200 OK)
+```json
+  
 {
   "status": "success",
   "crop": "Tomato",
@@ -66,5 +68,5 @@ Fetches the 10 most recent market prices for a specific commodity from the India
     }
   ]
 }
-
-(Note: If no data is available for the given crop/state combination today, the data array will return empty [])(Note: If no data is available for the given crop/state combination today, the data array will return empty [])
+```
+Note: If no data is available for the given crop/state combination today, the data array will return empty [].
