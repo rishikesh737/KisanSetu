@@ -3,22 +3,26 @@ from pydantic import BaseModel
 import numpy as np
 from PIL import Image
 import io
-import tensorflow.lite as tflite
+import onnxruntime as ort  # <-- Changed from tflite
 import os
 
 router = APIRouter()
 
-# 1. Load the TFLite Model
-MODEL_PATH = "assets/models/kisansetu_v38.tflite"
+# 1. Load the ONNX Model
+MODEL_PATH = "assets/models/kisansetu_v38.onnx"
+MOCK_MODE = False
+ort_session = None
+input_name = None
 
 try:
-    interpreter = tflite.Interpreter(model_path=MODEL_PATH)
-    interpreter.allocate_tensors()
-    input_details = interpreter.get_input_details()
-    output_details = interpreter.get_output_details()
-    print("✅ TFLite Model Loaded Successfully")
+    # Initialize the ONNX session
+    ort_session = ort.InferenceSession(MODEL_PATH)
+    input_name = ort_session.get_inputs()[0].name
+    print("✅ ONNX Model Loaded Successfully")
 except Exception as e:
-    print(f"⚠️ Failed to load model: {e}")
+    print(f"⚠️ Failed to load ONNX model: {e}")
+    print("🔄 Entering API MOCK MODE so frontend team is unblocked.")
+    MOCK_MODE = True
 
 
 # 2. Define Response Schema
@@ -72,44 +76,51 @@ CLASS_NAMES = [
 
 
 def process_image(image_bytes: bytes) -> np.ndarray:
-    """Prepares the image exactly how MobileNetV2 expects it."""
+    """Prepares the image exactly how the Keras model expects it (Raw RGB pixels)."""
     image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
     image = image.resize((224, 224))
+
+    # Convert to numpy array (Raw 0-255 pixels, RGB format)
     img_array = np.array(image, dtype=np.float32)
+
+    # Add batch dimension (1, 224, 224, 3)
     img_array = np.expand_dims(img_array, axis=0)
 
-    # MobileNetV2 specific preprocessing (scaling between -1 and 1)
-    img_array = (img_array / 127.5) - 1.0
     return img_array
 
 
 @router.post("/predict", response_model=DiseaseResponse)
 async def predict_disease(file: UploadFile = File(...)):
-    """
-    Receives a crop leaf image from the Flutter app and returns the disease diagnosis.
-    """
     if not file.content_type.startswith("image/"):
         raise HTTPException(status_code=400, detail="File provided is not an image.")
+
+    if MOCK_MODE:
+        return DiseaseResponse(
+            class_id=29,
+            disease_name="Tomato___Early_blight",
+            confidence=0.985,
+            message="MOCK MODE ACTIVE - Real model compilation failed on host.",
+        )
 
     try:
         # Read and preprocess the image
         contents = await file.read()
         input_data = process_image(contents)
 
-        # Run Inference
-        interpreter.set_tensor(input_details[0]["index"], input_data)
-        interpreter.invoke()
-        output_data = interpreter.get_tensor(output_details[0]["index"])[0]
+        # Run ONNX Inference
+        outputs = ort_session.run(None, {input_name: input_data})
+        output_data = outputs[0][0]  # Extract the prediction array
 
         # Get highest confidence prediction
         class_id = int(np.argmax(output_data))
         confidence = float(output_data[class_id])
+        disease_name = CLASS_NAMES[class_id]
 
         return DiseaseResponse(
             class_id=class_id,
+            disease_name=disease_name,
             confidence=confidence,
             message="Inference completed successfully.",
         )
-
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
