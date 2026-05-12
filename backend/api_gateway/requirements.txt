@@ -6,6 +6,3 @@ httpx
 python-dotenv
 alembic==1.13.1
 python-multipart==0.0.9
-Pillow==10.3.0
-onnxruntime>=1.17.0
-numpy<2.0.0
