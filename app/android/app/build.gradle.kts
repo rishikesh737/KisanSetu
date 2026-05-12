@@ -37,6 +37,12 @@ android {
             signingConfig = signingConfigs.getByName("debug")
         }
     }
+
+    // Prevent compression of TFLite model files — required for tflite_flutter
+    // memory-mapped loading to work correctly
+    aaptOptions {
+        noCompress += "tflite"
+    }
 }
 
 flutter {
