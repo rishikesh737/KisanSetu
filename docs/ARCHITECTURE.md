@@ -16,7 +16,7 @@ KisanSetu relies on a distributed, API-first architecture designed to serve both
    * Stores persistent data: `Farmers` (profiles), `MarketPrices` (daily cache), and `DiseaseScans` (history).
 
 4. **The AI Microservices**
-   * **Computer Vision:** A localized CNN model (ResNet/MobileNet) loaded via PyTorch/TensorFlow to analyze leaf images sent from the mobile app.
+   * **Computer Vision:** A highly optimized MobileNetV2 model running on-device via TensorFlow Lite within the Flutter app. Enables 100% offline rice disease detection using device NPU/CPU.
    * **Advisory System:** A RAG (Retrieval-Augmented Generation) pipeline using a local LLM and Vector Database (ChromaDB/FAISS) containing ICAR documents.
 
 ## 📡 External Integrations

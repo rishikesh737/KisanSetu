@@ -1,0 +1,5 @@
+Rice_Bacterial_Blight
+Rice_Blast
+Rice_Brown_Spot
+Rice_Healthy
+Rice_Tungro
