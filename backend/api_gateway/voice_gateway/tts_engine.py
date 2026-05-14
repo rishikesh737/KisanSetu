@@ -18,6 +18,7 @@ class TTSProvider(Enum):
     AZURE = "azure"
     LOCAL = "local"
     GTTS = "gtts"  # Free offline TTS
+    EXOTEL = "exotel"  # Exotel Passthru applet (returns JSON)
 
 
 class LanguageConfig:
@@ -40,6 +41,19 @@ class LanguageConfig:
         "en": "Joanna",
         "mr": "Aditi",
         "gu": "Aditi"
+    }
+
+    # Exotel TTS language codes (subset of BCP-47 supported by Exotel)
+    EXOTEL_LANG_CODES = {
+        "hi": "hi",
+        "en": "en",
+        "mr": "mr",
+        "gu": "en",   # Exotel fallback — Gujarati not natively supported
+        "kn": "en",   # Exotel fallback
+        "ta": "en",   # Exotel fallback
+        "te": "en",   # Exotel fallback
+        "bn": "en",   # Exotel fallback
+        "pa": "en",   # Exotel fallback
     }
 
 
@@ -124,6 +138,62 @@ class TTSEngine:
     def _get_cache_key(self, text: str, language: str) -> str:
         """Generate cache key for TTS"""
         return hashlib.md5(f"{text}:{language}".encode()).hexdigest()
+
+    # ==================== Exotel Passthru Response Generators ====================
+    # These methods return plain Python dicts that must be serialised as JSON
+    # by the FastAPI JSONResponse wrapper in routers/ivr.py.
+    # They are additive — existing TwiML methods above are intentionally preserved.
+
+    def _get_exotel_lang(self, language: str) -> str:
+        """Map internal language code to Exotel TTS lang code."""
+        return LanguageConfig.EXOTEL_LANG_CODES.get(language, "hi")
+
+    def generate_exotel_say(self, text: str, language: str = "hi") -> dict:
+        """
+        Generate an Exotel Passthru 'say' action payload.
+        Exotel will read *text* aloud using its built-in TTS and then hang up
+        unless a subsequent action is chained.
+        """
+        return {
+            "action": "say",
+            "lang": self._get_exotel_lang(language),
+            "message": text
+        }
+
+    def generate_exotel_gather(
+        self,
+        text: str,
+        language: str = "hi",
+        max_digits: int = 1,
+        callback_url: str = ""
+    ) -> dict:
+        """
+        Generate an Exotel Passthru 'gather' action payload.
+        Exotel reads *text* aloud, waits for up to *max_digits* DTMF keypresses,
+        then POSTs the collected Digits to *callback_url*.
+        """
+        return {
+            "action": "gather",
+            "maxDigits": max_digits,
+            "callbackUrl": callback_url,
+            "say": {
+                "lang": self._get_exotel_lang(language),
+                "message": text
+            }
+        }
+
+    def generate_exotel_hangup(self, text: str = None, language: str = "hi") -> dict:
+        """
+        Generate an Exotel Passthru hangup payload.
+        If *text* is provided, Exotel reads it before disconnecting the call.
+        """
+        if text:
+            return {
+                "action": "say_and_hangup",
+                "lang": self._get_exotel_lang(language),
+                "message": text
+            }
+        return {"action": "hangup"}
 
     def get_cached_audio(self, text: str, language: str) -> Optional[str]:
         """Get cached audio if available"""
