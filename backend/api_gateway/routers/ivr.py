@@ -1,18 +1,17 @@
 """
 KisanSetu IVR Engine - Main Application
-Voice Gateway for farmer phone calls
+Voice Gateway for farmer phone calls (Exotel Passthru backend)
 """
 
-# Add backend to path for disease service imports
+import os
 
-from fastapi import FastAPI, APIRouter, Form, Query, HTTPException
-from fastapi.responses import Response
+from fastapi import APIRouter, Form, HTTPException
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
 from typing import Optional, Dict
 from datetime import datetime
 import uuid
 import base64
-import io
 
 from voice_gateway.call_manager import CallManager
 from voice_gateway.tts_engine import TTSEngine, TTSProvider, IVRPrompts
@@ -20,10 +19,17 @@ from voice_gateway.stt_engine import STTEngine, STTProvider
 
 router = APIRouter()
 
+# ---------------------------------------------------------------------------
+# Runtime config — set TUNNEL_BASE_URL in backend/api_gateway/.env
+# This must be an absolute public URL so that Exotel's servers can reach the
+# callbackUrl embedded inside every "gather" response payload.
+# ---------------------------------------------------------------------------
+TUNNEL_BASE_URL = os.getenv("TUNNEL_BASE_URL", "https://your-tunnel.ngrok.io").rstrip("/")
+
 # Initialize services
 call_manager = CallManager()
-# Use local TTS (Twilio's built-in Say) - no credentials needed
-tts_engine = TTSEngine(provider=TTSProvider.LOCAL)
+# Provider switched to EXOTEL — responses are JSON dicts, not TwiML XML
+tts_engine = TTSEngine(provider=TTSProvider.EXOTEL)
 stt_engine = STTEngine(provider=STTProvider.GOOGLE_CLOUD)
 
 
@@ -45,12 +51,13 @@ async def root():
     """Root endpoint"""
     return {
         "service": "KisanSetu IVR Engine",
-        "version": "1.0.0",
+        "version": "2.0.0",
+        "provider": "Exotel",
         "status": "running"
     }
 
 
-# ==================== Twilio Webhooks ====================
+# ==================== Exotel Webhooks ====================
 
 @router.post("/webhooks/call")
 async def handle_incoming_call(
@@ -59,23 +66,22 @@ async def handle_incoming_call(
     To: Optional[str] = Form(None)
 ):
     """
-    Handle incoming Twilio/Africa's Talking call
-    Start IVR flow with welcome message
+    Handle incoming Exotel call (Passthru applet entry point).
+    Returns a JSON payload instructing Exotel to play the welcome message
+    and gather 1 DTMF digit for language selection.
     """
-    # Create new call session
+    # Create new call session — CallManager is provider-agnostic
     session = call_manager.create_call(CallSid, From)
 
-    # Generate welcome TwiML with language selection
     welcome_text = IVRPrompts.get_prompt("welcome", "hi")
 
-    twiml = tts_engine.generate_twiml_with_gather(
+    payload = tts_engine.generate_exotel_gather(
         text=welcome_text,
         language="hi",
-        num_digits=1,
-        callback_url=f"/webhooks/gather"
+        max_digits=1,
+        callback_url=f"{TUNNEL_BASE_URL}/api/v1/ivr/webhooks/gather"
     )
-
-    return Response(content=twiml, media_type="application/xml")
+    return JSONResponse(content=payload)
 
 
 @router.post("/webhooks/gather")
@@ -84,157 +90,141 @@ async def handle_dtmf_input(
     Digits: str = Form(...),
     From: str = Form(...)
 ):
-    """Handle DTMF input from user"""
+    """
+    Handle DTMF digit(s) collected by Exotel.
+    Exotel POSTs Digits here after the 'gather' action completes.
+    Returns the next Exotel Passthru JSON action.
+    """
     session = call_manager.get_call(CallSid)
 
     if not session:
-        # Call not found - return error
-        return Response(content='<?xml version="1.0"?><Response><Hangup/></Response>')
+        # Unknown session — disconnect cleanly
+        return JSONResponse(content=tts_engine.generate_exotel_hangup())
 
-    # Process based on current state
+    gather_url = f"{TUNNEL_BASE_URL}/api/v1/ivr/webhooks/gather"
     current_state = session.state.value
 
-    if current_state == "welcome" or current_state == "language_select":
-        # Handle language selection
+    if current_state in ("welcome", "language_select"):
+        # ── Language selection ──────────────────────────────────────────────
         if Digits == "1":
             session.language = "hi"
             call_manager.update_state(CallSid, "main_menu")
-            response_text = IVRPrompts.get_prompt("language_selected", "hi", lang_name="Hindi")
-            response_text += " " + IVRPrompts.get_prompt("main_menu", "hi")
+            text = (IVRPrompts.get_prompt("language_selected", "hi", lang_name="Hindi") +
+                    " " + IVRPrompts.get_prompt("main_menu", "hi"))
         elif Digits == "2":
             session.language = "en"
             call_manager.update_state(CallSid, "main_menu")
-            response_text = IVRPrompts.get_prompt("language_selected", "en", lang_name="English")
-            response_text += " " + IVRPrompts.get_prompt("main_menu", "en")
+            text = (IVRPrompts.get_prompt("language_selected", "en", lang_name="English") +
+                    " " + IVRPrompts.get_prompt("main_menu", "en"))
         else:
-            response_text = IVRPrompts.get_prompt("invalid_option", session.language)
-            response_text += " " + IVRPrompts.get_prompt("welcome", session.language)
+            text = (IVRPrompts.get_prompt("invalid_option", session.language) +
+                    " " + IVRPrompts.get_prompt("welcome", session.language))
 
-        twiml = tts_engine.generate_twiml_with_gather(
-            text=response_text,
+        payload = tts_engine.generate_exotel_gather(
+            text=text,
             language=session.language,
-            callback_url="/webhooks/gather"
+            max_digits=1,
+            callback_url=gather_url
         )
+        return JSONResponse(content=payload)
 
     elif current_state == "main_menu":
-        # Handle main menu options
+        # ── Main menu ───────────────────────────────────────────────────────
         if Digits == "1":
             # Disease detection
+            # NOTE: Exotel does not support MMS. Farmers are directed to the
+            # KisanSetu Android app for image-based disease detection.
             call_manager.update_state(CallSid, "disease_scan")
-            response_text = IVRPrompts.get_prompt("disease_intro", session.language)
-
-            # Ask for image via MMS
-            twiml = f'''<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-    <Message to="{From}">कृपया अपने फसल की पत्ती की फोटो खींचें और इस नंबर पर MMS के रूप में भेजें।</Message>
-    <Say language="{get_twiml_lang(session.language)}">{response_text}</Say>
-    <Gather numDigits="1" action="/webhooks/gather" method="POST">
-        <Say language="{get_twiml_lang(session.language)}">फोटो भेजने के बाद 1 दबाएं।</Say>
-    </Gather>
-</Response>'''
-            return Response(content=twiml)
+            text = IVRPrompts.get_prompt("disease_intro", session.language)
+            payload = tts_engine.generate_exotel_gather(
+                text=text,
+                language=session.language,
+                max_digits=1,
+                callback_url=gather_url
+            )
+            return JSONResponse(content=payload)
 
         elif Digits == "2":
             # Market prices
             call_manager.update_state(CallSid, "market_prices")
-            response_text = IVRPrompts.get_prompt("market_menu", session.language)
-
-            twiml = tts_engine.generate_twiml_with_gather(
-                text=response_text,
-                language=session.language,
-                callback_url="/webhooks/gather"
-            )
+            text = IVRPrompts.get_prompt("market_menu", session.language)
 
         elif Digits == "3":
-            # Weather
+            # Weather info
             call_manager.update_state(CallSid, "weather_info")
-            response_text = IVRPrompts.get_prompt("weather_menu", session.language)
-
-            twiml = tts_engine.generate_twiml_with_gather(
-                text=response_text,
-                language=session.language,
-                callback_url="/webhooks/gather"
-            )
+            text = IVRPrompts.get_prompt("weather_menu", session.language)
 
         elif Digits == "9":
             # Exit
-            response_text = IVRPrompts.get_prompt("goodbye", session.language)
-            twiml = f'''<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-    <Say language="{get_twiml_lang(session.language)}">{response_text}</Say>
-    <Hangup/>
-</Response>'''
+            farewell = IVRPrompts.get_prompt("goodbye", session.language)
             call_manager.complete_call(CallSid)
-            return Response(content=twiml)
+            payload = tts_engine.generate_exotel_hangup(farewell, session.language)
+            return JSONResponse(content=payload)
 
         else:
-            response_text = IVRPrompts.get_prompt("invalid_option", session.language)
-            response_text += " " + IVRPrompts.get_prompt("main_menu", session.language)
+            text = (IVRPrompts.get_prompt("invalid_option", session.language) +
+                    " " + IVRPrompts.get_prompt("main_menu", session.language))
 
-            twiml = tts_engine.generate_twiml_with_gather(
-                text=response_text,
-                language=session.language,
-                callback_url="/webhooks/gather"
-            )
+        payload = tts_engine.generate_exotel_gather(
+            text=text,
+            language=session.language,
+            max_digits=1,
+            callback_url=gather_url
+        )
+        return JSONResponse(content=payload)
 
     else:
-        # Default - go back to main menu
-        response_text = IVRPrompts.get_prompt("main_menu", session.language)
-        twiml = tts_engine.generate_twiml_with_gather(
-            text=response_text,
+        # Fallback — return to main menu from any unhandled state
+        text = IVRPrompts.get_prompt("main_menu", session.language)
+        payload = tts_engine.generate_exotel_gather(
+            text=text,
             language=session.language,
-            callback_url="/webhooks/gather"
+            max_digits=1,
+            callback_url=gather_url
         )
-
-    return Response(content=twiml, media_type="application/xml")
+        return JSONResponse(content=payload)
 
 
 @router.post("/webhooks/mms")
 async def handle_mms_image(
-    CallSid: str = Form(...),
-    From: str = Form(...),
-    MediaUrl: str = Form(...)
+    CallSid: str = Form(None),
+    From: str = Form(None),
+    MediaUrl: str = Form(None)
 ):
-    """Handle incoming MMS with image for disease detection"""
-    session = call_manager.get_call(CallSid)
+    """
+    DEPRECATED — Exotel does not support MMS.
 
-    if not session:
-        raise HTTPException(status_code=404, detail="Call session not found")
-
-    # Store image URL for processing
-    call_manager.store_session_data(CallSid, "image_url", MediaUrl)
-
-    # Send processing message
-    response_text = IVRPrompts.get_prompt("processing", session.language)
-
-    # In production, trigger async disease detection here
-    # For demo, return with result message
-    twiml = f'''<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-    <Say language="{get_twiml_lang(session.language)}">{response_text}</Say>
-    <Say language="{get_twiml_lang(session.language)}">{IVRPrompts.get_prompt("healthy_result", session.language)}</Say>
-    <Gather numDigits="1" action="/webhooks/gather" method="POST">
-        <Say language="{get_twiml_lang(session.language)}">{IVRPrompts.get_prompt("main_menu", session.language)}</Say>
-    </Gather>
-</Response>'''
-
-    call_manager.update_state(CallSid, "results")
-    return Response(content=twiml, media_type="application/xml")
+    Image-based disease detection has moved to the KisanSetu Android app,
+    which performs on-device TFLite inference. This endpoint returns HTTP 410
+    so that any legacy integrations fail loudly rather than silently.
+    """
+    return JSONResponse(
+        status_code=410,
+        content={
+            "detail": (
+                "MMS is not supported on Exotel. "
+                "Use the KisanSetu Android app for offline image-based disease detection."
+            )
+        }
+    )
 
 
 @router.post("/webhooks/status")
 async def handle_call_status(
     CallSid: str = Form(...),
-    CallStatus: str = Form(...)
+    Status: str = Form(...)  # Exotel sends "Status"; Twilio used "CallStatus"
 ):
-    """Handle call status callbacks"""
-    if CallStatus in ["completed", "busy", "no-answer", "failed"]:
+    """
+    Handle Exotel call-status callbacks.
+    Exotel posts this when the call transitions to a terminal state.
+    """
+    terminal_states = {"completed", "busy", "no-answer", "failed"}
+    if Status.lower() in terminal_states:
         call_manager.complete_call(CallSid)
-
     return {"status": "recorded"}
 
 
-# ==================== IVR API Endpoints ====================
+# ==================== IVR API Endpoints (provider-agnostic) ====================
 
 class AnalyzeRequest(BaseModel):
     call_sid: str
@@ -242,44 +232,23 @@ class AnalyzeRequest(BaseModel):
 
 
 @router.post("/api/analyze")
-async def analyze_iv_image(request: AnalyzeRequest):
+async def analyze_ivr_image(request: AnalyzeRequest):
     """
-    Analyze image from IVR flow
-    Returns disease detection result
-    In production, this would call the API Gateway's disease detection service
+    Analyze image from IVR flow.
+    Cloud inference is deprecated — on-device TFLite via Android app is the
+    primary detection path.
     """
-    # For now, return a placeholder response
-    # In production, make HTTP call to API Gateway
-    # import httpx
-    # async with httpx.AsyncClient() as client:
-    #     response = await client.post(
-    #         "http://api_gateway:8000/api/v1/disease/predict",
-    #         files={"file": request.image_base64}
-    #     )
-
-    # Decode base64 image
     try:
-        image_bytes = base64.b64decode(request.image_base64)
-        result = {"success": False, "error": "Cloud inference deprecated. Please use the KisanSetu Android App for offline detection."}
-
-        if result.get("success"):
-            message = "Please use the Android app."
-            return {
-                "success": True,
-                "result": result,
-                "message": message
-            }
-        else:
-            return {
-                "success": False,
-                "error": result.get("error")
-            }
-
-    except Exception as e:
+        base64.b64decode(request.image_base64)  # validate encoding
         return {
             "success": False,
-            "error": str(e)
+            "error": (
+                "Cloud inference is deprecated. "
+                "Please use the KisanSetu Android App for offline detection."
+            )
         }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
 
 
 @router.get("/api/calls/{call_sid}")
@@ -318,10 +287,3 @@ async def get_active_calls():
             for c in calls
         ]
     }
-
-
-def get_twiml_lang(language: str) -> str:
-    """Map language code to TwiML format"""
-    return "hi-IN" if language == "hi" else "en-US"
-
-
