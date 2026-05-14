@@ -13,7 +13,7 @@ from datetime import datetime
 import uuid
 import base64
 
-from voice_gateway.call_manager import CallManager
+from voice_gateway.call_manager import CallManager, IVRState
 from voice_gateway.tts_engine import TTSEngine, TTSProvider, IVRPrompts
 from voice_gateway.stt_engine import STTEngine, STTProvider
 
@@ -24,7 +24,9 @@ router = APIRouter()
 # This must be an absolute public URL so that Exotel's servers can reach the
 # callbackUrl embedded inside every "gather" response payload.
 # ---------------------------------------------------------------------------
-TUNNEL_BASE_URL = os.getenv("TUNNEL_BASE_URL", "https://your-tunnel.ngrok.io").rstrip("/")
+TUNNEL_BASE_URL = os.getenv("TUNNEL_BASE_URL", "https://your-tunnel.ngrok.io").rstrip(
+    "/"
+)
 
 # Initialize services
 call_manager = CallManager()
@@ -35,6 +37,7 @@ stt_engine = STTEngine(provider=STTProvider.GOOGLE_CLOUD)
 
 # ==================== Health & Status ====================
 
+
 @router.get("/health")
 async def health_check():
     """Health check endpoint"""
@@ -42,7 +45,7 @@ async def health_check():
         "status": "healthy",
         "service": "IVR Engine",
         "timestamp": datetime.utcnow().isoformat(),
-        "active_calls": call_manager.get_active_call_count()
+        "active_calls": call_manager.get_active_call_count(),
     }
 
 
@@ -53,17 +56,16 @@ async def root():
         "service": "KisanSetu IVR Engine",
         "version": "2.0.0",
         "provider": "Exotel",
-        "status": "running"
+        "status": "running",
     }
 
 
 # ==================== Exotel Webhooks ====================
 
+
 @router.post("/webhooks/call")
 async def handle_incoming_call(
-    CallSid: str = Form(...),
-    From: str = Form(...),
-    To: Optional[str] = Form(None)
+    CallSid: str = Form(...), From: str = Form(...), To: Optional[str] = Form(None)
 ):
     """
     Handle incoming Exotel call (Passthru applet entry point).
@@ -79,16 +81,14 @@ async def handle_incoming_call(
         text=welcome_text,
         language="hi",
         max_digits=1,
-        callback_url=f"{TUNNEL_BASE_URL}/api/v1/ivr/webhooks/gather"
+        callback_url=f"{TUNNEL_BASE_URL}/api/v1/ivr/webhooks/gather",
     )
     return JSONResponse(content=payload)
 
 
 @router.post("/webhooks/gather")
 async def handle_dtmf_input(
-    CallSid: str = Form(...),
-    Digits: str = Form(...),
-    From: str = Form(...)
+    CallSid: str = Form(...), Digits: str = Form(...), From: str = Form(...)
 ):
     """
     Handle DTMF digit(s) collected by Exotel.
@@ -108,23 +108,29 @@ async def handle_dtmf_input(
         # ── Language selection ──────────────────────────────────────────────
         if Digits == "1":
             session.language = "hi"
-            call_manager.update_state(CallSid, "main_menu")
-            text = (IVRPrompts.get_prompt("language_selected", "hi", lang_name="Hindi") +
-                    " " + IVRPrompts.get_prompt("main_menu", "hi"))
+            call_manager.update_state(CallSid, IVRState.MAIN_MENU)
+            text = (
+                IVRPrompts.get_prompt("language_selected", "hi", lang_name="Hindi")
+                + " "
+                + IVRPrompts.get_prompt("main_menu", "hi")
+            )
         elif Digits == "2":
             session.language = "en"
-            call_manager.update_state(CallSid, "main_menu")
-            text = (IVRPrompts.get_prompt("language_selected", "en", lang_name="English") +
-                    " " + IVRPrompts.get_prompt("main_menu", "en"))
+            call_manager.update_state(CallSid, IVRState.DISEASE_SCAN)
+            text = (
+                IVRPrompts.get_prompt("language_selected", "en", lang_name="English")
+                + " "
+                + IVRPrompts.get_prompt("main_menu", "en")
+            )
         else:
-            text = (IVRPrompts.get_prompt("invalid_option", session.language) +
-                    " " + IVRPrompts.get_prompt("welcome", session.language))
+            text = (
+                IVRPrompts.get_prompt("invalid_option", session.language)
+                + " "
+                + IVRPrompts.get_prompt("welcome", session.language)
+            )
 
         payload = tts_engine.generate_exotel_gather(
-            text=text,
-            language=session.language,
-            max_digits=1,
-            callback_url=gather_url
+            text=text, language=session.language, max_digits=1, callback_url=gather_url
         )
         return JSONResponse(content=payload)
 
@@ -134,24 +140,24 @@ async def handle_dtmf_input(
             # Disease detection
             # NOTE: Exotel does not support MMS. Farmers are directed to the
             # KisanSetu Android app for image-based disease detection.
-            call_manager.update_state(CallSid, "disease_scan")
+            call_manager.update_state(CallSid, IVRState.DISEASE_SCAN)
             text = IVRPrompts.get_prompt("disease_intro", session.language)
             payload = tts_engine.generate_exotel_gather(
                 text=text,
                 language=session.language,
                 max_digits=1,
-                callback_url=gather_url
+                callback_url=gather_url,
             )
             return JSONResponse(content=payload)
 
         elif Digits == "2":
             # Market prices
-            call_manager.update_state(CallSid, "market_prices")
+            call_manager.update_state(CallSid, IVRState.MARKET_PRICES)
             text = IVRPrompts.get_prompt("market_menu", session.language)
 
         elif Digits == "3":
             # Weather info
-            call_manager.update_state(CallSid, "weather_info")
+            call_manager.update_state(CallSid, IVRState.WEATHER_INFO)
             text = IVRPrompts.get_prompt("weather_menu", session.language)
 
         elif Digits == "9":
@@ -162,14 +168,14 @@ async def handle_dtmf_input(
             return JSONResponse(content=payload)
 
         else:
-            text = (IVRPrompts.get_prompt("invalid_option", session.language) +
-                    " " + IVRPrompts.get_prompt("main_menu", session.language))
+            text = (
+                IVRPrompts.get_prompt("invalid_option", session.language)
+                + " "
+                + IVRPrompts.get_prompt("main_menu", session.language)
+            )
 
         payload = tts_engine.generate_exotel_gather(
-            text=text,
-            language=session.language,
-            max_digits=1,
-            callback_url=gather_url
+            text=text, language=session.language, max_digits=1, callback_url=gather_url
         )
         return JSONResponse(content=payload)
 
@@ -177,19 +183,14 @@ async def handle_dtmf_input(
         # Fallback — return to main menu from any unhandled state
         text = IVRPrompts.get_prompt("main_menu", session.language)
         payload = tts_engine.generate_exotel_gather(
-            text=text,
-            language=session.language,
-            max_digits=1,
-            callback_url=gather_url
+            text=text, language=session.language, max_digits=1, callback_url=gather_url
         )
         return JSONResponse(content=payload)
 
 
 @router.post("/webhooks/mms")
 async def handle_mms_image(
-    CallSid: str = Form(None),
-    From: str = Form(None),
-    MediaUrl: str = Form(None)
+    CallSid: str = Form(None), From: str = Form(None), MediaUrl: str = Form(None)
 ):
     """
     DEPRECATED — Exotel does not support MMS.
@@ -205,14 +206,14 @@ async def handle_mms_image(
                 "MMS is not supported on Exotel. "
                 "Use the KisanSetu Android app for offline image-based disease detection."
             )
-        }
+        },
     )
 
 
 @router.post("/webhooks/status")
 async def handle_call_status(
     CallSid: str = Form(...),
-    Status: str = Form(...)  # Exotel sends "Status"; Twilio used "CallStatus"
+    Status: str = Form(...),  # Exotel sends "Status"; Twilio used "CallStatus"
 ):
     """
     Handle Exotel call-status callbacks.
@@ -225,6 +226,7 @@ async def handle_call_status(
 
 
 # ==================== IVR API Endpoints (provider-agnostic) ====================
+
 
 class AnalyzeRequest(BaseModel):
     call_sid: str
@@ -245,7 +247,7 @@ async def analyze_ivr_image(request: AnalyzeRequest):
             "error": (
                 "Cloud inference is deprecated. "
                 "Please use the KisanSetu Android App for offline detection."
-            )
+            ),
         }
     except Exception as e:
         return {"success": False, "error": str(e)}
@@ -266,7 +268,7 @@ async def get_call_info(call_sid: str):
         "state": session.state.value,
         "call_state": session.call_state.value,
         "session_data": session.session_data,
-        "created_at": session.created_at.isoformat()
+        "created_at": session.created_at.isoformat(),
     }
 
 
@@ -282,8 +284,8 @@ async def get_active_calls():
                 "phone_number": c.phone_number,
                 "language": c.language,
                 "state": c.state.value,
-                "created_at": c.created_at.isoformat()
+                "created_at": c.created_at.isoformat(),
             }
             for c in calls
-        ]
+        ],
     }
