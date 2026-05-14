@@ -5,7 +5,7 @@ Voice Gateway for farmer phone calls (Exotel Passthru backend)
 
 import os
 
-from fastapi import APIRouter, Form, HTTPException
+from fastapi import APIRouter, Form, HTTPException, Query
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
 from typing import Optional, Dict
@@ -63,14 +63,12 @@ async def root():
 # ==================== Exotel Webhooks ====================
 
 
-@router.post("/webhooks/call")
+@router.get("/webhooks/call")
 async def handle_incoming_call(
-    CallSid: str = Form(...), From: str = Form(...), To: Optional[str] = Form(None)
+    CallSid: str = Query(...), From: str = Query(...), To: Optional[str] = Query(None)
 ):
     """
     Handle incoming Exotel call (Passthru applet entry point).
-    Returns a JSON payload instructing Exotel to play the welcome message
-    and gather 1 DTMF digit for language selection.
     """
     # Create new call session — CallManager is provider-agnostic
     session = call_manager.create_call(CallSid, From)
@@ -83,10 +81,10 @@ async def handle_incoming_call(
         max_digits=1,
         callback_url=f"{TUNNEL_BASE_URL}/api/v1/ivr/webhooks/gather",
     )
-    return JSONResponse(content=payload)
+    return JSONResponse(content=payload, headers={"Content-Type": "application/json"})
 
 
-@router.post("/webhooks/gather")
+@router.get("/webhooks/gather")
 async def handle_dtmf_input(
     CallSid: str = Form(...), Digits: str = Form(...), From: str = Form(...)
 ):
