@@ -20,3 +20,6 @@ venv/
 mobilenet_v2_kisansetu.pt
 ai_services/disease_detection/research/
 *.h5
+ai_services/disease_detection/data/rice/
+ai_services/disease_detection/venv/
+*.h5
